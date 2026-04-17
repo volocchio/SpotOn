@@ -4,7 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 <title>SpotOn Sales Suite</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <style>
 :root {
@@ -162,12 +163,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .toast{position:fixed;bottom:75px;left:50%;transform:translateX(-50%) translateY(20px);background:#1e293b;color:#fff;padding:8px 18px;border-radius:8px;font-size:12px;font-weight:600;opacity:0;transition:all .3s;pointer-events:none;z-index:300;}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
 
-/* PDF overrides */
-.pdf-mode .header,.pdf-mode .tab-nav{position:static;}
-.pdf-mode .action-bar{display:none;}
-.pdf-mode .rate-details{display:block!important;}
-.pdf-mode .rate-toggle{display:none;}
-.pdf-mode body{padding-bottom:0;}
+/* No PDF mode needed — jsPDF generates natively */
 
 @media(max-width:380px){.input-grid{grid-template-columns:1fr;}.summary-grid{grid-template-columns:1fr 1fr;}}
 </style>
@@ -805,19 +801,240 @@ function updateProposal() {
 }
 function escHtml(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML;}
 
-// ========== PDF DOWNLOADS ==========
-function downloadPDF() {
-  var el=document.getElementById('page-calc');
-  document.body.classList.add('pdf-mode');
-  el.style.display='block';
-  html2pdf().set({margin:[8,8,8,8],filename:'SpotOn-Rate-Comparison.pdf',image:{type:'jpeg',quality:.95},html2canvas:{scale:2,useCORS:true},jsPDF:{unit:'mm',format:'a4',orientation:'portrait'},pagebreak:{mode:['avoid-all','css','legacy']}}).from(el).save().then(function(){document.body.classList.remove('pdf-mode');showToast('PDF downloaded!');});
+// ========== PDF HELPERS ==========
+function pdfHeader(doc, title, subtitle) {
+  // Blue gradient header bar
+  doc.setFillColor(26,115,232);
+  doc.rect(0,0,210,28,"F");
+  doc.setFillColor(79,70,229);
+  doc.rect(105,0,105,28,"F");
+  doc.setTextColor(255,255,255);
+  doc.setFontSize(18); doc.setFont('helvetica','bold');
+  doc.text(title,105,13,{align:'center'});
+  doc.setFontSize(9); doc.setFont('helvetica','normal');
+  doc.text(subtitle,105,20,{align:'center'});
+  doc.setTextColor(30,41,59);
+  return 34;
 }
+function pdfSection(doc, y, title) {
+  if(y>255){doc.addPage();y=15;}
+  doc.setFillColor(241,245,249); doc.roundedRect(14,y-1,182,8,1,1,'F');
+  doc.setFontSize(10); doc.setFont('helvetica','bold'); doc.setTextColor(26,115,232);
+  doc.text(title,18,y+5);
+  doc.setTextColor(30,41,59); doc.setFont('helvetica','normal');
+  return y+12;
+}
+function pdfKeyVal(doc,y,label,val,opts){
+  opts=opts||{};
+  doc.setFontSize(9); doc.setFont('helvetica','normal'); doc.setTextColor(100,116,139);
+  doc.text(label,18,y);
+  doc.setFont('helvetica','bold');
+  if(opts.color) doc.setTextColor(opts.color[0],opts.color[1],opts.color[2]);
+  else doc.setTextColor(30,41,59);
+  doc.text(val,192,y,{align:'right'});
+  doc.setTextColor(30,41,59);
+  return y+6;
+}
+function pdfBigNumber(doc,y,label,val,color){
+  if(y>248){doc.addPage();y=15;}
+  doc.setFillColor(color[0],color[1],color[2]);
+  doc.roundedRect(14,y,182,22,3,3,'F');
+  doc.setTextColor(255,255,255);
+  doc.setFontSize(8); doc.setFont('helvetica','normal');
+  doc.text(label,105,y+7,{align:'center'});
+  doc.setFontSize(20); doc.setFont('helvetica','bold');
+  doc.text(val,105,y+18,{align:'center'});
+  doc.setTextColor(30,41,59);
+  return y+28;
+}
+function pdfMiniBar(doc,y,labels,values,colors,maxVal){
+  if(y>235){doc.addPage();y=15;}
+  var barH=7, gap=3, x0=50, barW=130;
+  for(var i=0;i<labels.length;i++){
+    var cy=y+i*(barH+gap);
+    doc.setFontSize(8); doc.setFont('helvetica','normal'); doc.setTextColor(100,116,139);
+    doc.text(labels[i],48,cy+5,{align:'right'});
+    doc.setFillColor(241,245,249); doc.roundedRect(x0,cy,barW,barH,2,2,'F');
+    var w=Math.max(4,(values[i]/maxVal)*barW);
+    doc.setFillColor(colors[i][0],colors[i][1],colors[i][2]);
+    doc.roundedRect(x0,cy,w,barH,2,2,'F');
+    doc.setFontSize(7); doc.setTextColor(30,41,59); doc.setFont('helvetica','bold');
+    doc.text(fmt(values[i]),x0+w+3,cy+5);
+  }
+  return y+labels.length*(barH+gap)+4;
+}
+function pdfFooter(doc){
+  var pg=doc.internal.getNumberOfPages();
+  var today=new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'});
+  for(var i=1;i<=pg;i++){
+    doc.setPage(i);
+    doc.setFontSize(7); doc.setFont('helvetica','normal'); doc.setTextColor(160,160,160);
+    doc.text('SpotOn Sales Suite  |  '+today+'  |  Page '+i+' of '+pg,105,290,{align:'center'});
+  }
+}
+
+// ========== RATE COMPARISON PDF ==========
+function downloadPDF() {
+  var r=calcResults; if(!r.sales){calc();r=calcResults;}
+  var doc=new jspdf.jsPDF({unit:'mm',format:'a4'});
+  var y=pdfHeader(doc,'SpotOn Rate Comparison','Monthly Processing Cost Analysis');
+
+  // Merchant info
+  y=pdfSection(doc,y,'Merchant Information');
+  y=pdfKeyVal(doc,y,'Monthly Net CC Sales',fmt(r.sales));
+  y=pdfKeyVal(doc,y,'Monthly Transactions',r.txns.toLocaleString());
+  y=pdfKeyVal(doc,y,'Current Effective Rate',parseNum('currentRate').toFixed(2)+'%');
+  var fees=parseNum('monthlyFees');
+  if(fees>0) y=pdfKeyVal(doc,y,'Monthly Fees/Add-ons',fmt(fees));
+  y+=2;
+
+  // Current cost
+  y=pdfKeyVal(doc,y,'YOUR CURRENT MONTHLY COST',fmt(r.curCost),{color:[220,53,69]});
+  doc.setDrawColor(220,53,69); doc.setLineWidth(0.3); doc.line(18,y-2,192,y-2);
+  y+=4;
+
+  // Options table
+  y=pdfSection(doc,y,'SpotOn Pricing Options');
+  doc.autoTable({
+    startY:y,
+    margin:{left:14,right:14},
+    head:[['Plan','Rate Details','Monthly Cost','Annual Cost','Annual Savings']],
+    body:[
+      ['Interchange Plus (IC+)',parseNum('icRate').toFixed(2)+'% + '+parseNum('icMarkup').toFixed(2)+'% + $'+parseNum('icPerTxn').toFixed(2)+'/txn',fmt(r.icTotal),fmt(r.icTotal*12),fmt(Math.max(0,(r.curCost-r.icTotal)*12))],
+      ['Fixed / Variable',parseNum('fvCPRate').toFixed(2)+'% CP / '+parseNum('fvCNPRate').toFixed(2)+'% CNP + $'+parseNum('fvPerTxn').toFixed(2)+'/txn',fmt(r.fvTotal),fmt(r.fvTotal*12),fmt(Math.max(0,(r.curCost-r.fvTotal)*12))],
+      ['Surcharge 3%','Customer pays '+parseNum('scRate').toFixed(2)+'%, your net '+parseNum('scNetCost').toFixed(2)+'%',fmt(r.scTotal),fmt(r.scTotal*12),fmt(Math.max(0,(r.curCost-r.scTotal)*12))],
+      ['Cash Discount / Dual',parseNum('dpRate').toFixed(2)+'% dual, your net '+parseNum('dpNetCost').toFixed(2)+'%',fmt(r.dpTotal),fmt(r.dpTotal*12),fmt(Math.max(0,(r.curCost-r.dpTotal)*12))]
+    ],
+    styles:{fontSize:8,cellPadding:3,font:'helvetica'},
+    headStyles:{fillColor:[26,115,232],textColor:255,fontStyle:'bold',halign:'center'},
+    columnStyles:{0:{fontStyle:'bold',cellWidth:42},1:{cellWidth:52,fontSize:7},2:{halign:'right'},3:{halign:'right'},4:{halign:'right',textColor:[13,159,110],fontStyle:'bold'}},
+    alternateRowStyles:{fillColor:[248,250,252]},
+    didParseCell:function(data){
+      if(data.section==='body'){
+        var bestIdx=r.options.findIndex(function(o){return o===r.best;});
+        if(data.row.index===bestIdx){data.cell.styles.fillColor=[230,249,241];}
+      }
+    }
+  });
+  y=doc.lastAutoTable.finalY+6;
+
+  // Bar chart
+  if(y>200){doc.addPage();y=15;}
+  y=pdfSection(doc,y,'Visual Comparison');
+  var labels=['Current','IC+','Fixed/Var','Surcharge','Dual Pricing'];
+  var vals=[r.curCost,r.icTotal,r.fvTotal,r.scTotal,r.dpTotal];
+  var cols=[[239,68,68],[59,130,246],[245,158,11],[139,92,246],[16,185,129]];
+  var mx=Math.max.apply(null,vals);
+  y=pdfMiniBar(doc,y,labels,vals,cols,mx);
+  y+=2;
+
+  // Savings banner
+  y=pdfBigNumber(doc,y,'ESTIMATED ANNUAL SAVINGS WITH BEST OPTION ('+r.best.label.toUpperCase()+')',fmt(Math.max(0,r.maxSavYr)),[13,159,110]);
+
+  pdfFooter(doc);
+  doc.save('SpotOn-Rate-Comparison.pdf');
+  showToast('PDF downloaded!');
+}
+
+// ========== PROPOSAL PDF ==========
 function downloadProposal() {
-  updateProposal();
-  var el=document.getElementById('proposal-content');
-  if(!el){showToast('Fill in proposal details first');return;}
-  var biz=document.getElementById('bizName').value||'Merchant';
-  html2pdf().set({margin:[10,10,10,10],filename:'SpotOn-Proposal-'+biz.replace(/[^a-zA-Z0-9]/g,'_')+'.pdf',image:{type:'jpeg',quality:.98},html2canvas:{scale:2,useCORS:true},jsPDF:{unit:'mm',format:'a4',orientation:'portrait'}}).from(el).save().then(function(){showToast('Proposal PDF downloaded!');});
+  var r=calcResults; if(!r.sales){calc();r=calcResults;}
+  var biz=document.getElementById('bizName').value||'[Business Name]';
+  var contact=document.getElementById('contactName').value||'[Contact]';
+  var loc=document.getElementById('bizLocation').value||'';
+  var rep=document.getElementById('repName').value||'[Rep Name]';
+  var notes=document.getElementById('proposalNotes').value;
+  var planSel=document.getElementById('recPlan').value;
+  var recPlan=r.best;
+  if(planSel!=='auto'){var found=r.options.filter(function(o){return o.key===planSel;})[0];if(found)recPlan=found;}
+  var savMo=r.curCost-recPlan.total;
+  var savYr=savMo*12;
+  var today=new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'});
+
+  var doc=new jspdf.jsPDF({unit:'mm',format:'a4'});
+  var y=pdfHeader(doc,'SpotOn Savings Proposal',biz);
+
+  // Contact line
+  doc.setFontSize(9); doc.setFont('helvetica','normal'); doc.setTextColor(100,116,139);
+  doc.text('Prepared for '+contact+(loc?' - '+loc:'')+' | '+today,105,y,{align:'center'});
+  doc.text('Prepared by '+rep,105,y+5,{align:'center'});
+  doc.setTextColor(30,41,59); y+=14;
+
+  // Volume summary
+  y=pdfSection(doc,y,'Processing Volume');
+  y=pdfKeyVal(doc,y,'Monthly Net CC Sales',fmt(r.sales));
+  y=pdfKeyVal(doc,y,'Monthly Transactions',r.txns.toLocaleString());
+  y=pdfKeyVal(doc,y,'Current Effective Rate',parseNum('currentRate').toFixed(2)+'%');
+  y+=3;
+
+  // Side-by-side current vs proposed
+  y=pdfSection(doc,y,'Cost Comparison');
+  // Current box
+  doc.setFillColor(254,242,242); doc.roundedRect(14,y,86,30,3,3,'F');
+  doc.setFontSize(8); doc.setFont('helvetica','bold'); doc.setTextColor(100,116,139);
+  doc.text('CURRENT MONTHLY COST',57,y+7,{align:'center'});
+  doc.setFontSize(22); doc.setTextColor(220,53,69);
+  doc.text(fmt(r.curCost),57,y+20,{align:'center'});
+  doc.setFontSize(8); doc.setFont('helvetica','normal'); doc.setTextColor(100,116,139);
+  doc.text(parseNum('currentRate').toFixed(2)+'% effective rate',57,y+26,{align:'center'});
+  // SpotOn box
+  doc.setFillColor(230,249,241); doc.roundedRect(110,y,86,30,3,3,'F');
+  doc.setFontSize(8); doc.setFont('helvetica','bold'); doc.setTextColor(100,116,139);
+  doc.text('SPOTON MONTHLY COST',153,y+7,{align:'center'});
+  doc.setFontSize(22); doc.setTextColor(13,159,110);
+  doc.text(fmt(recPlan.total),153,y+20,{align:'center'});
+  doc.setFontSize(8); doc.setFont('helvetica','normal'); doc.setTextColor(100,116,139);
+  doc.text(recPlan.label,153,y+26,{align:'center'});
+  doc.setTextColor(30,41,59); y+=38;
+
+  // Big savings
+  y=pdfBigNumber(doc,y,'ESTIMATED ANNUAL SAVINGS',fmt(Math.max(0,savYr)),[13,159,110]);
+
+  // All options table
+  y=pdfSection(doc,y,'All SpotOn Options');
+  doc.autoTable({
+    startY:y,
+    margin:{left:14,right:14},
+    head:[['Plan','Monthly','Annual','Annual Savings']],
+    body:r.options.map(function(o){
+      return [o.label,fmt(o.total),fmt(o.total*12),fmt(Math.max(0,(r.curCost-o.total)*12))];
+    }),
+    styles:{fontSize:9,cellPadding:3.5,font:'helvetica'},
+    headStyles:{fillColor:[26,115,232],textColor:255,fontStyle:'bold',halign:'center'},
+    columnStyles:{0:{fontStyle:'bold'},1:{halign:'right'},2:{halign:'right'},3:{halign:'right',textColor:[13,159,110],fontStyle:'bold'}},
+    alternateRowStyles:{fillColor:[248,250,252]},
+    didParseCell:function(data){
+      if(data.section==='body'){
+        var idx=r.options.indexOf(recPlan);
+        if(data.row.index===idx){data.cell.styles.fillColor=[230,249,241];}
+      }
+    }
+  });
+  y=doc.lastAutoTable.finalY+6;
+
+  // Notes
+  if(notes){
+    if(y>250){doc.addPage();y=15;}
+    y=pdfSection(doc,y,'Special Offer');
+    doc.setFontSize(10); doc.setFont('helvetica','normal');
+    var lines=doc.splitTextToSize(notes,170);
+    doc.text(lines,18,y); y+=lines.length*5+4;
+  }
+
+  // Signature lines
+  if(y>240){doc.addPage();y=15;}
+  y+=10;
+  doc.setDrawColor(30,41,59); doc.setLineWidth(0.4);
+  doc.line(14,y+18,95,y+18); doc.line(115,y+18,196,y+18);
+  doc.setFontSize(8); doc.setFont('helvetica','normal'); doc.setTextColor(100,116,139);
+  doc.text('Merchant Signature',14,y+23);
+  doc.text(contact,14,y+28);
+  doc.text('SpotOn Representative',115,y+23);
+  doc.text(rep,115,y+28);
+
+  pdfFooter(doc);
+  doc.save('SpotOn-Proposal-'+biz.replace(/[^a-zA-Z0-9]/g,'_')+'.pdf');
+  showToast('Proposal PDF downloaded!');
 }
 
 // ========== SHARE ==========
